@@ -467,7 +467,9 @@ namespace BuildXL.Scheduler.FileSystem
         /// <summary>
         /// Reports existence of path in real file system
         /// </summary>
-        internal void ReportRealFileSystemExistence(AbsolutePath path, PathExistence existence)
+        /// <param name="path">The path to the file to update.</param>
+        /// <param name="existence">The file existence state to set.</param>
+        public void ReportRealFileSystemExistence(AbsolutePath path, PathExistence existence)
         {
             GetOrAddExistence(path, FileSystemViewMode.Real, existence);
         }

@@ -323,7 +323,7 @@ static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs)
             }
         }
 
-        const int minParallelism = 0;
+        const int minParallelism = 4;
         if (numInputs >= minParallelism)
         {
             if (pText != nullptr)

@@ -202,6 +202,29 @@ static int CountMatches(const char *s, const char *find, size_t findLen)
     return numMatches;
 }
 
+static bool g_ParsedMinParallelism = false;
+static int g_MinParallelism;
+static int GetMinParallelism()
+{
+    if (!g_ParsedMinParallelism)
+    {
+        wchar_t minParallelismStr[16];
+        DWORD ret = GetEnvironmentVariable(L"__ANYBUILD_MINPARALLELISM", minParallelismStr, ARRAYSIZE(minParallelismStr));
+        if (ret <= ARRAYSIZE(minParallelismStr))
+        {
+            g_MinParallelism = _wtoi(minParallelismStr);
+            g_ParsedMinParallelism = true;
+            Dbg(L"Shim: Found MinParallelism %d", g_MinParallelism);
+        }
+        else
+        {
+            Dbg(L"Shim: Error: Buffer size needed for __ANYBUILD_MINPARALLELISM was %u", ret);
+        }
+    }
+
+    return g_MinParallelism;
+}
+
 static bool CallPluginFunc(const wstring& command, const wchar_t* commandArgs, LPVOID lpEnvironment, LPCWSTR lpWorkingDirectory)
 {
     assert(g_SubstituteProcessExecutionPluginFunc != nullptr);
@@ -356,7 +379,7 @@ static bool ShouldSubstituteShim(const wstring &command, const wchar_t *commandA
             }
         }
 
-        const int minParallelism = 4;
+        const int minParallelism = GetMinParallelism();
         if (numInputs >= minParallelism)
         {
             if (pText != nullptr)

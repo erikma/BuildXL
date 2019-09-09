@@ -176,7 +176,33 @@ static bool CommandArgsContainMatch(const wchar_t *commandArgs, const wchar_t *a
     return wcsstr(commandArgs, argMatch) != nullptr;
 }
 
-static bool ShouldSubstituteShim(const wstring &command, const wchar_t *commandArgs)
+static int CountMatches(const wchar_t *s, const wchar_t *find, size_t findLen)
+{
+    int numMatches = 0;
+    const wchar_t *current = s;
+    while ((current = wcsstr(current, find)) != nullptr)  // TODO: StrStrIW
+    {
+        numMatches++;
+        current += findLen;
+    }
+
+    return numMatches;
+}
+
+static int CountMatches(const char *s, const char *find, size_t findLen)
+{
+    int numMatches = 0;
+    const char *current = s;
+    while ((current = strstr(current, find)) != nullptr)  // TODO: StrStrIA
+    {
+        numMatches++;
+        current += findLen;
+    }
+
+    return numMatches;
+}
+
+static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs)
 {
     assert(g_substituteProcessExecutionShimPath != nullptr);
 
@@ -204,7 +230,7 @@ static bool ShouldSubstituteShim(const wstring &command, const wchar_t *commandA
             if (command[commandLen - processLen - 1] == L'\\' &&
                 _wcsicmp(command.c_str() + commandLen - processLen, processName) == 0)
             {
-                if (CommandArgsContainMatch(commandArgs, pMatch->ArgumentMatch.get()))
+                if (CommandArgsContainMatch(commandArgs.c_str(), pMatch->ArgumentMatch.get()))
                 {
                     foundMatch = true;
                     break;
@@ -218,7 +244,7 @@ static bool ShouldSubstituteShim(const wstring &command, const wchar_t *commandA
         {
             if (_wcsicmp(processName, command.c_str()) == 0)
             {
-                if (CommandArgsContainMatch(commandArgs, pMatch->ArgumentMatch.get()))
+                if (CommandArgsContainMatch(commandArgs.c_str(), pMatch->ArgumentMatch.get()))
                 {
                     foundMatch = true;
                     break;
@@ -231,6 +257,108 @@ static bool ShouldSubstituteShim(const wstring &command, const wchar_t *commandA
     {
         // A match means we don't want to shim - an opt-out list.
         return !foundMatch;
+    }
+
+    //erik: Begin filtering hackage.
+    if (foundMatch && commandLen >= 6 && _wcsicmp(command.c_str() + commandLen - 6, L"cl.exe") == 0)  // TODO: Should check for prefix \ or check len == 6 since cl.exe is run by itself sometimes.
+    {
+        int numInputs =
+            CountMatches(commandArgs.c_str(), L".cpp", 4) +
+            CountMatches(commandArgs.c_str(), L".c ", 3) +  // TOOD: Misses .c files at end of string.
+            CountMatches(commandArgs.c_str(), L".idl", 4);
+
+        size_t responseFileArgStart = commandArgs.find_first_of(L'@');
+        char *pText = nullptr;
+        wchar_t *wideRsp = nullptr;
+        size_t responseFileArgEnd = 0;
+        DWORD fileSize = 0;
+        if (responseFileArgStart != wstring::npos)
+        {
+            wstring responseFilePath;
+            if (commandArgs[responseFileArgStart + 1] == L'"')  // @"path"
+            {
+                responseFileArgEnd = commandArgs.find_first_of(L'"', responseFileArgStart + 2);
+                responseFilePath = commandArgs.substr(responseFileArgStart + 2, responseFileArgEnd - responseFileArgStart - 2);
+                responseFileArgEnd++;  // Skip trailing quote.
+            }
+            else  // @path
+            {
+                responseFileArgEnd = commandArgs.find_first_of(L' ', responseFileArgStart + 1);
+                if (responseFileArgEnd == wstring::npos)
+                {
+                    responseFileArgEnd = commandArgs.length();
+                }
+                responseFilePath = commandArgs.substr(responseFileArgStart + 1, responseFileArgEnd - responseFileArgStart - 1);
+            }
+            // Dbg(L"Shim: erik: cl.exe Found rsp file '%s' from args='%s'", responseFilePath.c_str(), commandArgs.c_str());
+
+            // Read as a char/byte buffer, but MSBuild often uses Unicode, so we check for a Unicode BOM and switch behavior.
+            HANDLE hFile = CreateFile(responseFilePath.c_str(), GENERIC_READ, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            fileSize = GetFileSize(hFile, NULL);
+            pText = new char[fileSize + 2];  // Add 2 null characters at the end in case this is Unicode and we cast the pointer.
+            DWORD bytesRead;
+            // TODO: Check bytesRead to ensure it was all read in one block
+            ReadFile(hFile, pText, fileSize, &bytesRead, NULL);
+            CloseHandle(hFile);
+            pText[fileSize] = '\0';
+            pText[fileSize + 1] = '\0';
+
+            // Dbg(L"Shim: erik: cl.exe Found rsp contents '%S' or '%s', [0]=%d, [1]=%d", pText, (wchar_t *)pText, pText[0], pText[1]);
+            if (fileSize >= 2 && (byte)pText[0] == 0xFF && (byte)pText[1] == 0xFE)
+            {
+                wideRsp = (wchar_t *)(pText + 2);  // Skip BOM in reinterpret.
+                // Dbg(L"Shim: erik: cl.exe Found BOM on file, casting to wchar_t* as'%s'", wideRsp);
+                numInputs +=
+                    CountMatches(wideRsp, L".cpp", 4) +
+                    CountMatches(wideRsp, L".c ", 3) +  // TOOD: Misses .c files at end of string.
+                    CountMatches(wideRsp, L".idl", 4);
+            }
+            else
+            {
+                // Dbg(L"Shim: erik: cl.exe No BOM, interpreting as char*");
+                numInputs +=
+                    CountMatches(pText, ".cpp", 4) +
+                    CountMatches(pText, ".c ", 3) +  // TOOD: Misses .c files at end of string.
+                    CountMatches(pText, ".idl", 4);
+            }
+        }
+
+        const int minParallelism = 0;
+        if (numInputs >= minParallelism)
+        {
+            if (pText != nullptr)
+            {
+                // We already went to the trouble of reading the rsp file, avoid doing it again in ClSimulator.cs.
+                // Paste the rsp file contents into its original parameter location in commandArgs.
+                if (wideRsp != nullptr)
+                {
+                    commandArgs.replace(responseFileArgStart, responseFileArgEnd - responseFileArgStart, wideRsp, fileSize / 2 - 1);
+                }
+                else
+                {
+                    int reqLength = ::MultiByteToWideChar(CP_UTF8, 0, pText, (int)fileSize, 0, 0);
+                    wstring rsp((size_t)reqLength, L'\0');
+                    ::MultiByteToWideChar(CP_UTF8, 0, pText, (int)fileSize, &rsp[0], (int)rsp.length());
+                    commandArgs.replace(responseFileArgStart, responseFileArgEnd - responseFileArgStart, wideRsp, fileSize / 2);
+                }
+
+                delete[] pText;
+            }
+
+            Dbg(L"Shim: Found %d inputs, injecting shim since matches min %d, from args='%s'", numInputs, minParallelism, commandArgs.c_str());
+            return true; 
+        }
+        else
+        {
+            Dbg(L"Shim: Found %d inputs, running locally since min is %d, from args='%s'", numInputs, minParallelism, commandArgs.c_str());
+        }
+
+        if (pText != nullptr)
+        {
+            delete[] pText;
+        }
+        
+        return false;
     }
 
     // An opt-in list, shim if matching.
@@ -262,7 +390,7 @@ BOOL WINAPI MaybeInjectSubstituteProcessShim(
         FindApplicationNameFromCommandLine(cmdLine, command, commandArgs);
         Dbg(L"Shim: Found command='%s', args='%s' from lpApplicationName='%s', lpCommandLine='%s'", command.c_str(), commandArgs.c_str(), lpApplicationName, lpCommandLine);
 
-        if (ShouldSubstituteShim(command, commandArgs.c_str()))
+        if (ShouldSubstituteShim(command, commandArgs))
         {
             // Instead of Detouring the child, run the requested shim
             // passing the original command line, but only for appropriate commands.

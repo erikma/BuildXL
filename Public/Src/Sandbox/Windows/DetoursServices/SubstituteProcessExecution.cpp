@@ -379,6 +379,12 @@ static bool ShouldSubstituteShim(const wstring &command, const wchar_t *commandA
             }
         }
 
+        if (numInputs < 1)
+        {
+            // Conform to managed code semantics - MinParallelism setting sent via environment assumes each command has at least parallelism 1.
+            numInputs = 1;
+        }
+        
         const int minParallelism = GetMinParallelism();
         if (numInputs >= minParallelism)
         {

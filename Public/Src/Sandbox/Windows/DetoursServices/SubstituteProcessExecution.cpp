@@ -22,6 +22,7 @@ using std::vector;
 static BOOL WINAPI InjectShim(
     wstring               &commandWithoutQuotes,
     wstring               &argumentsWithoutCommand,
+    bool                  replaceCommandNameForTrackedBuildEngine,
     LPSECURITY_ATTRIBUTES lpProcessAttributes,
     LPSECURITY_ATTRIBUTES lpThreadAttributes,
     BOOL                  bInheritHandles,
@@ -51,32 +52,37 @@ static BOOL WINAPI InjectShim(
     wcscat_s(fullCommandLine, fullCmdLineSizeInChars, L"\" ");
     wcscat_s(fullCommandLine, fullCmdLineSizeInChars, argumentsWithoutCommand.c_str());
 
-    // Get the filename of the command, copy the shim path and replace its tool name with the command.
-    // TODO: This hack needs a feature flag like 'ConformShimFileNameToToolName' and allow a list of tool names this is allowed for.
-    // We assume the fake tool file has already been created by the caller.
-    // TODO: PathFindFileNameW is Windows-specific, won't compile for others.
-    size_t commandFileNameStartIndex = commandWithoutQuotes.find_last_of(L'\\');
-    if (commandFileNameStartIndex != wstring::npos)
+    const wchar_t* shimCommandLine = g_substituteProcessExecutionShimPath;
+    wstring shimWithChangedFileName;  // Keep ref outside of if to avoid early delete.
+    if (replaceCommandNameForTrackedBuildEngine)
     {
-        commandFileNameStartIndex++;
-    }
-    else
-    {
-        commandFileNameStartIndex = 0;  // Whole string.
-    }
+        // Get the filename of the command, copy the shim path and replace its tool name with the command.
+        // TODO: This hack needs a feature flag like 'ConformShimFileNameToToolName' and allow a list of tool names this is allowed for.
+        // We assume the fake tool file has already been created by the caller, hence it must know the full extent of executable names that can be replaced here.
+        size_t commandFileNameStartIndex = commandWithoutQuotes.find_last_of(L'\\');
+        if (commandFileNameStartIndex != wstring::npos)
+        {
+            commandFileNameStartIndex++;
+        }
+        else
+        {
+            commandFileNameStartIndex = 0;  // Whole string.
+        }
 
-    wchar_t* shimFileNameStart = wcsrchr(g_substituteProcessExecutionShimPath, L'\\');
-    if (shimFileNameStart != nullptr)
-    {
-        shimFileNameStart++;
-    }
-    else
-    {
-        shimFileNameStart = g_substituteProcessExecutionShimPath;
-    }
+        wchar_t* shimFileNameStart = wcsrchr(g_substituteProcessExecutionShimPath, L'\\');
+        if (shimFileNameStart != nullptr)
+        {
+            shimFileNameStart++;
+        }
+        else
+        {
+            shimFileNameStart = g_substituteProcessExecutionShimPath;
+        }
 
-    wstring shimWithChangedFileName(g_substituteProcessExecutionShimPath, (size_t)(shimFileNameStart - g_substituteProcessExecutionShimPath));
-    shimWithChangedFileName += commandWithoutQuotes.c_str() + commandFileNameStartIndex;
+        shimWithChangedFileName = wstring(g_substituteProcessExecutionShimPath, (size_t)(shimFileNameStart - g_substituteProcessExecutionShimPath));
+        shimWithChangedFileName += commandWithoutQuotes.c_str() + commandFileNameStartIndex;
+        shimCommandLine = shimWithChangedFileName.c_str();
+    }
 
     Dbg(L"Injecting substitute shim '%s' for process command line '%s'", shimWithChangedFileName.c_str(), fullCommandLine);
     BOOL rv = Real_CreateProcessW(
@@ -271,9 +277,11 @@ static bool CallPluginFunc(const wstring& command, const wchar_t* commandArgs, L
     return g_SubstituteProcessExecutionPluginFunc(command.c_str(), commandArgs, lpEnvironment, lpWorkingDirectory) != 0;
 }
 
-static bool ShouldSubstituteShim(const wstring &command, const wchar_t *commandArgs, LPVOID lpEnvironment, LPCWSTR lpWorkingDirectory)
+static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs, LPVOID lpEnvironment, LPCWSTR lpWorkingDirectory, bool &replaceCommandNameForTrackedBuildEngine)
 {
     assert(g_SubstituteProcessExecutionShimPath != nullptr);
+
+    replaceCommandNameForTrackedBuildEngine = false;
 
     // Easy cases.
     if (g_pShimProcessMatches == nullptr || g_pShimProcessMatches->empty())
@@ -345,6 +353,8 @@ static bool ShouldSubstituteShim(const wstring &command, const wchar_t *commandA
     //erik: Begin filtering hackage.
     if (foundMatch && commandLen >= 6 && _wcsicmp(command.c_str() + commandLen - 6, L"cl.exe") == 0)  // TODO: Should check for prefix \ or check len == 6 since cl.exe is run by itself sometimes.
     {
+        replaceCommandNameForTrackedBuildEngine = true;
+
         int numInputs =
             CountMatches(commandArgs.c_str(), L".cpp", 4) +
             CountMatches(commandArgs.c_str(), L".c ", 3) +  // TOOD: Misses .c files at end of string.
@@ -479,7 +489,8 @@ BOOL WINAPI MaybeInjectSubstituteProcessShim(
         FindApplicationNameFromCommandLine(cmdLine, command, commandArgs);
         Dbg(L"Shim: Found command='%s', args='%s' from lpApplicationName='%s', lpCommandLine='%s'", command.c_str(), commandArgs.c_str(), lpApplicationName, lpCommandLine);
 
-        if (ShouldSubstituteShim(command, commandArgs.c_str(), lpEnvironment, lpCurrentDirectory))
+        bool replaceCommandNameForTrackedBuildEngine = false;
+        if (ShouldSubstituteShim(command, commandArgs, lpEnvironment, lpCurrentDirectory, replaceCommandNameForTrackedBuildEngine))
         {
             // Instead of Detouring the child, run the requested shim
             // passing the original command line, but only for appropriate commands.
@@ -487,6 +498,7 @@ BOOL WINAPI MaybeInjectSubstituteProcessShim(
             return InjectShim(
                 command,
                 commandArgs,
+                replaceCommandNameForTrackedBuildEngine,
                 lpProcessAttributes,
                 lpThreadAttributes,
                 bInheritHandles,

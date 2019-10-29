@@ -51,9 +51,36 @@ static BOOL WINAPI InjectShim(
     wcscat_s(fullCommandLine, fullCmdLineSizeInChars, L"\" ");
     wcscat_s(fullCommandLine, fullCmdLineSizeInChars, argumentsWithoutCommand.c_str());
 
-    Dbg(L"Injecting substitute shim '%s' for process command line '%s'", g_substituteProcessExecutionShimPath, fullCommandLine);
+    // Get the filename of the command, copy the shim path and replace its tool name with the command.
+    // TODO: This hack needs a feature flag like 'ConformShimFileNameToToolName' and allow a list of tool names this is allowed for.
+    // We assume the fake tool file has already been created by the caller.
+    // TODO: PathFindFileNameW is Windows-specific, won't compile for others.
+    size_t commandFileNameStartIndex = commandWithoutQuotes.find_last_of(L'\\');
+    if (commandFileNameStartIndex != wstring::npos)
+    {
+        commandFileNameStartIndex++;
+    }
+    else
+    {
+        commandFileNameStartIndex = 0;  // Whole string.
+    }
+
+    wchar_t* shimFileNameStart = wcsrchr(g_substituteProcessExecutionShimPath, L'\\');
+    if (shimFileNameStart != nullptr)
+    {
+        shimFileNameStart++;
+    }
+    else
+    {
+        shimFileNameStart = g_substituteProcessExecutionShimPath;
+    }
+
+    wstring shimWithChangedFileName(g_substituteProcessExecutionShimPath, (size_t)(shimFileNameStart - g_substituteProcessExecutionShimPath));
+    shimWithChangedFileName += commandWithoutQuotes.c_str() + commandFileNameStartIndex;
+
+    Dbg(L"Injecting substitute shim '%s' for process command line '%s'", shimWithChangedFileName.c_str(), fullCommandLine);
     BOOL rv = Real_CreateProcessW(
-        /*lpApplicationName:*/ g_substituteProcessExecutionShimPath,
+        /*lpApplicationName:*/ shimWithChangedFileName.c_str(),
         /*lpCommandLine:*/ fullCommandLine,
         lpProcessAttributes,
         lpThreadAttributes,

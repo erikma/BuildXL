@@ -84,9 +84,9 @@ static BOOL WINAPI InjectShim(
         shimCommandLine = shimWithChangedFileName.c_str();
     }
 
-    Dbg(L"Injecting substitute shim '%s' for process command line '%s'", shimWithChangedFileName.c_str(), fullCommandLine);
+    Dbg(L"Injecting substitute shim '%s' for process command line '%s'", shimCommandLine, fullCommandLine);
     BOOL rv = Real_CreateProcessW(
-        /*lpApplicationName:*/ shimWithChangedFileName.c_str(),
+        /*lpApplicationName:*/ shimCommandLine,
         /*lpCommandLine:*/ fullCommandLine,
         lpProcessAttributes,
         lpThreadAttributes,

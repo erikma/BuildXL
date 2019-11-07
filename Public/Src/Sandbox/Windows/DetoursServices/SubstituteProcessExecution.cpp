@@ -318,16 +318,36 @@ static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs, b
     }
 
     //erik: Begin filtering hackage.
-    if (foundMatch && commandLen >= 6 && _wcsicmp(command.c_str() + commandLen - 6, L"cl.exe") == 0)  // TODO: Should check for prefix \ or check len == 6 since cl.exe is run by itself sometimes.
+    bool estimateParallelismForCl = false;
+    size_t commandArgsIndexClAnalysis = 0;
+    if (foundMatch && commandLen >= 11 && _wcsicmp(command.c_str() + commandLen - 11, L"Tracker.exe") == 0)  // TODO: Should check for prefix \ or check len == 6 since cl.exe is run by itself sometimes.
+    {
+        // Look for cl.exe which could also be the "oacrcl.exe" analysis wrapper.
+        size_t clMatchIndex = commandArgs.find(L"cl.exe");
+        if (clMatchIndex == wstring::npos)
+        {
+            return false;
+        }
+
+        estimateParallelismForCl = true;
+        commandArgsIndexClAnalysis = clMatchIndex;  // Don't want to load Tracker response file which is commonly used by MSBuild.
+    }
+    else if (foundMatch && commandLen >= 6 && _wcsicmp(command.c_str() + commandLen - 6, L"cl.exe") == 0)  // TODO: Should check for prefix \ or check len == 6 since cl.exe is run by itself sometimes.
     {
         replaceCommandNameForTrackedBuildEngine = true;
+        estimateParallelismForCl = true;
+        commandArgsIndexClAnalysis = 0;
+    }
 
+    if (estimateParallelismForCl)
+    {
+        const wchar_t* pCommandArgs = commandArgs.c_str() + commandArgsIndexClAnalysis;
         int numInputs =
-            CountMatches(commandArgs.c_str(), L".cpp", 4) +
-            CountMatches(commandArgs.c_str(), L".c ", 3) +  // TOOD: Misses .c files at end of string.
-            CountMatches(commandArgs.c_str(), L".idl", 4);
+            CountMatches(pCommandArgs, L".cpp", 4) +
+            CountMatches(pCommandArgs, L".c ", 3) +  // TOOD: Misses .c files at end of string.
+            CountMatches(pCommandArgs, L".idl", 4);
 
-        size_t responseFileArgStart = commandArgs.find_first_of(L'@');
+        size_t responseFileArgStart = commandArgs.find_first_of(L'@', commandArgsIndexClAnalysis);
         char *pText = nullptr;
         wchar_t *wideRsp = nullptr;
         size_t responseFileArgEnd = 0;
@@ -350,7 +370,7 @@ static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs, b
                 }
                 responseFilePath = commandArgs.substr(responseFileArgStart + 1, responseFileArgEnd - responseFileArgStart - 1);
             }
-            // Dbg(L"Shim: erik: cl.exe Found rsp file '%s' from args='%s'", responseFilePath.c_str(), commandArgs.c_str());
+            // Dbg(L"Shim: erik: cl.exe Found rsp file '%s' from args='%s'", responseFilePath.c_str(), commandLineForClAnalysis.c_str());
 
             // Read as a char/byte buffer, but MSBuild often uses Unicode, so we check for a Unicode BOM and switch behavior.
             HANDLE hFile = CreateFile(responseFilePath.c_str(), GENERIC_READ, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);

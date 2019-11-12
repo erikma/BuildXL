@@ -258,6 +258,38 @@ static int GetMinParallelism()
     return g_MinParallelism;
 }
 
+// Reads a file with no conversion to Unicode. Returns false if reading the file failed. Caller must delete[] pText.
+static bool ReadRawResponseFile(const wchar_t* responseFilePath, char*& pText, DWORD& fileSize)
+{
+    HANDLE hFile = CreateFile(responseFilePath, GENERIC_READ, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    fileSize = GetFileSize(hFile, NULL);
+    pText = new char[fileSize + 2];  // Add 2 null characters at the end in case this is Unicode and we cast the pointer later.
+    DWORD bytesRead = 0;
+    bool success = true;
+    do
+    {
+        DWORD read = 0;
+        if (!ReadFile(hFile, pText + bytesRead, fileSize - bytesRead, &read, NULL))
+        {
+            success = false;
+            break;
+        }
+
+        bytesRead += read;
+    } while (bytesRead < fileSize);
+
+    CloseHandle(hFile);
+
+    pText[fileSize] = '\0';
+    pText[fileSize + 1] = '\0';
+    return success;
+}
+
 static bool CallPluginFunc(const wstring& command, const wchar_t* commandArgs, LPVOID lpEnvironment, LPCWSTR lpWorkingDirectory)
 {
     assert(g_SubstituteProcessExecutionPluginFunc != nullptr);
@@ -353,12 +385,13 @@ static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs, L
     //erik: Begin filtering hackage.
     bool estimateParallelismForCl = false;
     size_t commandArgsIndexClAnalysis = 0;
-    if (foundMatch && commandLen >= 11 && _wcsicmp(command.c_str() + commandLen - 11, L"Tracker.exe") == 0)  // TODO: Should check for prefix \ or check len == 6 since cl.exe is run by itself sometimes.
+    if (foundMatch && commandLen >= 11 && _wcsicmp(command.c_str() + commandLen - 11, L"Tracker.exe") == 0)
     {
         // Look for cl.exe which could also be the "oacrcl.exe" analysis wrapper.
         size_t clMatchIndex = commandArgs.find(L"cl.exe");
         if (clMatchIndex == wstring::npos)
         {
+            Dbg(L"Shim: cl.exe not found in Tracker.exe args='%s'", commandArgs.c_str());
             return false;
         }
 
@@ -405,34 +438,28 @@ static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs, L
             }
             // Dbg(L"Shim: erik: cl.exe Found rsp file '%s' from args='%s'", responseFilePath.c_str(), commandLineForClAnalysis.c_str());
 
-            // Read as a char/byte buffer, but MSBuild often uses Unicode, so we check for a Unicode BOM and switch behavior.
-            HANDLE hFile = CreateFile(responseFilePath.c_str(), GENERIC_READ, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-            fileSize = GetFileSize(hFile, NULL);
-            pText = new char[fileSize + 2];  // Add 2 null characters at the end in case this is Unicode and we cast the pointer.
-            DWORD bytesRead;
-            // TODO: Check bytesRead to ensure it was all read in one block
-            ReadFile(hFile, pText, fileSize, &bytesRead, NULL);
-            CloseHandle(hFile);
-            pText[fileSize] = '\0';
-            pText[fileSize + 1] = '\0';
-
-            // Dbg(L"Shim: erik: cl.exe Found rsp contents '%S' or '%s', [0]=%d, [1]=%d", pText, (wchar_t *)pText, pText[0], pText[1]);
-            if (fileSize >= 2 && (byte)pText[0] == 0xFF && (byte)pText[1] == 0xFE)
+            if (!ReadRawResponseFile(responseFilePath.c_str(), pText, fileSize))
             {
-                wideRsp = (wchar_t *)(pText + 2);  // Skip BOM in reinterpret.
-                // Dbg(L"Shim: erik: cl.exe Found BOM on file, casting to wchar_t* as'%s'", wideRsp);
-                numInputs +=
-                    CountMatches(wideRsp, L".cpp", 4) +
-                    CountMatches(wideRsp, L".c ", 3) +  // TOOD: Misses .c files at end of string.
-                    CountMatches(wideRsp, L".idl", 4);
+                Dbg(L"Shim: Failed reading rsp file '%s' from args='%s', lasterr=%d", responseFilePath.c_str(), commandArgs.c_str(), GetLastError());
             }
             else
             {
-                // Dbg(L"Shim: erik: cl.exe No BOM, interpreting as char*");
-                numInputs +=
-                    CountMatches(pText, ".cpp", 4) +
-                    CountMatches(pText, ".c ", 3) +  // TOOD: Misses .c files at end of string.
-                    CountMatches(pText, ".idl", 4);
+                // We read the raw file into a char/byte buffer, but MSBuild often uses Unicode, so we check for a Unicode BOM and switch behavior.
+                if (fileSize >= 2 && (byte)pText[0] == 0xFF && (byte)pText[1] == 0xFE)
+                {
+                    wideRsp = (wchar_t *)(pText + 2);  // Skip BOM in reinterpret.
+                    numInputs +=
+                        CountMatches(wideRsp, L".cpp", 4) +
+                        CountMatches(wideRsp, L".c ", 3) +  // TOOD: Misses .c files at end of string.
+                        CountMatches(wideRsp, L".idl", 4);
+                }
+                else
+                {
+                    numInputs +=
+                        CountMatches(pText, ".cpp", 4) +
+                        CountMatches(pText, ".c ", 3) +  // TOOD: Misses .c files at end of string.
+                        CountMatches(pText, ".idl", 4);
+                }
             }
         }
 
@@ -472,11 +499,7 @@ static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs, L
             Dbg(L"Shim: Found %d inputs, running locally since min is %d, from args='%s'", numInputs, minParallelism, commandArgs.c_str());
         }
 
-        if (pText != nullptr)
-        {
-            delete[] pText;
-        }
-        
+        delete[] pText;
         return false;
     }
 

@@ -213,7 +213,7 @@ static int CountMatches(const wchar_t *s, const wchar_t *find, size_t findLen)
 {
     int numMatches = 0;
     const wchar_t *current = s;
-    while ((current = wcsstr(current, find)) != nullptr)  // TODO: StrStrIW
+    while ((current = StrStrIW(current, find)) != nullptr)
     {
         numMatches++;
         current += findLen;
@@ -226,7 +226,7 @@ static int CountMatches(const char *s, const char *find, size_t findLen)
 {
     int numMatches = 0;
     const char *current = s;
-    while ((current = strstr(current, find)) != nullptr)  // TODO: StrStrIA
+    while ((current = StrStrIA(current, find)) != nullptr)
     {
         numMatches++;
         current += findLen;
@@ -247,7 +247,6 @@ static int GetMinParallelism()
         {
             g_MinParallelism = _wtoi(minParallelismStr);
             g_ParsedMinParallelism = true;
-            Dbg(L"Shim: Found MinParallelism %d", g_MinParallelism);
         }
         else
         {
@@ -388,15 +387,15 @@ static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs, L
     if (foundMatch && commandLen >= 11 && _wcsicmp(command.c_str() + commandLen - 11, L"Tracker.exe") == 0)
     {
         // Look for cl.exe which could also be the "oacrcl.exe" analysis wrapper.
-        size_t clMatchIndex = commandArgs.find(L"cl.exe");
-        if (clMatchIndex == wstring::npos)
+        wchar_t* pCl = StrStrIW(commandArgs.c_str(), L"cl.exe");
+        if (pCl == nullptr)
         {
             Dbg(L"Shim: cl.exe not found in Tracker.exe args='%s'", commandArgs.c_str());
             return false;
         }
 
         estimateParallelismForCl = true;
-        commandArgsIndexClAnalysis = clMatchIndex;  // Don't want to load Tracker response file which is commonly used by MSBuild.
+        commandArgsIndexClAnalysis = static_cast<size_t>(pCl - commandArgs.c_str());  // Skip Tracker command line for analysis.
     }
     else if (foundMatch && commandLen >= 6 && _wcsicmp(command.c_str() + commandLen - 6, L"cl.exe") == 0)  // TODO: Should check for prefix \ or check len == 6 since cl.exe is run by itself sometimes.
     {

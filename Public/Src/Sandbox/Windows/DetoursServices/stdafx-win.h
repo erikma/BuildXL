@@ -33,6 +33,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <shlwapi.h>
 #pragma warning( pop )
 
 #include "Assertions.h"

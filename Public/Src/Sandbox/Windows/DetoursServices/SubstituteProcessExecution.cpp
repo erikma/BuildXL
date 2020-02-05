@@ -51,9 +51,9 @@ static BOOL WINAPI InjectShim(
     wcscat_s(fullCommandLine, fullCmdLineSizeInChars, L"\" ");
     wcscat_s(fullCommandLine, fullCmdLineSizeInChars, argumentsWithoutCommand.c_str());
 
-    Dbg(L"Injecting substitute shim '%s' for process command line '%s'", g_substituteProcessExecutionShimPath, fullCommandLine);
+    Dbg(L"Injecting substitute shim '%s' for process command line '%s'", g_SubstituteProcessExecutionShimPath, fullCommandLine);
     BOOL rv = Real_CreateProcessW(
-        /*lpApplicationName:*/ g_substituteProcessExecutionShimPath,
+        /*lpApplicationName:*/ g_SubstituteProcessExecutionShimPath,
         /*lpCommandLine:*/ fullCommandLine,
         lpProcessAttributes,
         lpThreadAttributes,
@@ -256,7 +256,7 @@ static bool ReadRawResponseFile(const wchar_t* responseFilePath, char*& pText, D
     return success;
 }
 
-static bool CallPluginFunc(const wstring& command, const wchar_t* commandArgs, LPVOID lpEnvironment, LPCWSTR lpWorkingDirectory)
+static bool CallPluginFunc(const wstring& command, wstring& commandArgs, LPVOID lpEnvironment, LPCWSTR lpWorkingDirectory)
 {
     assert(g_SubstituteProcessExecutionPluginFunc != nullptr);
 
@@ -272,7 +272,7 @@ static bool CallPluginFunc(const wstring& command, const wchar_t* commandArgs, L
         lpWorkingDirectory = curDir;
     }
 
-    return g_SubstituteProcessExecutionPluginFunc(command.c_str(), commandArgs, lpEnvironment, lpWorkingDirectory) != 0;
+    return g_SubstituteProcessExecutionPluginFunc(command.c_str(), commandArgs.c_str(), lpEnvironment, lpWorkingDirectory) != 0;
 }
 
 static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs, LPVOID lpEnvironment, LPCWSTR lpWorkingDirectory)

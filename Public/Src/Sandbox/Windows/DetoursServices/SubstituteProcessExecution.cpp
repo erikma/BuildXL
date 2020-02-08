@@ -279,25 +279,6 @@ static bool ShouldSubstituteShim(const wstring &command, wstring &commandArgs, L
 {
     assert(g_SubstituteProcessExecutionShimPath != nullptr);
 
-    // CODESYNC: Keep the even name in sync with the C# side
-    LPCWSTR disableProcessSubstitutionEventName = L"Local\\AnyBuild-DisableProcessSubstitution";
-    unique_handle<> disableProcessSubstitutionEvent(OpenEventW(SYNCHRONIZE, FALSE, disableProcessSubstitutionEventName));
-    if (!disableProcessSubstitutionEvent.isValid())
-    {
-        DWORD err = GetLastError();
-        Dbg(L"ShouldSubstituteShim: Failed to create event %s: 0x%08x (command='%s', args='%s)", disableProcessSubstitutionEventName, (int)err,
-            command.c_str(), commandArgs.c_str());
-        return false;
-    }
-
-    DWORD wfso = WaitForSingleObject(disableProcessSubstitutionEvent.get(), 0);
-    if (wfso == WAIT_OBJECT_0)
-    {
-        Dbg(L"ShouldSubstituteShim: Skip process substitution because it is globally disabled (command='%s', args='%s)",
-            command.c_str(), commandArgs.c_str());
-        return false;
-    }
-
     // Easy cases.
     if (g_pShimProcessMatches == nullptr || g_pShimProcessMatches->empty())
     {

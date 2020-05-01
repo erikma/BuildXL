@@ -37,7 +37,7 @@ namespace BuildXL.Processes.Internal
         private char[] CharBuffer => m_pooledCharBufferWrapper.Instance;
         private readonly Decoder m_decoder;
         private readonly PooledObjectWrapper<StringBuilder> m_pooledStringBuilderWrapper;
-        private StringBuilder StringBuilderInstace => m_pooledStringBuilderWrapper.Instance;
+        private StringBuilder StringBuilderInstance => m_pooledStringBuilderWrapper.Instance;
 
         private TaskCompletionSource<bool> m_completion;
 
@@ -81,8 +81,8 @@ namespace BuildXL.Processes.Internal
             var maxCharsPerBuffer = encoding.GetMaxCharCount(bufferSize);
             m_pooledCharBufferWrapper = Pools.GetCharArray(maxCharsPerBuffer);
             m_pooledStringBuilderWrapper = Pools.GetStringBuilder();
-            StringBuilderInstace.Clear();
-            StringBuilderInstace.EnsureCapacity(maxCharsPerBuffer * 2);
+            StringBuilderInstance.Clear();
+            StringBuilderInstance.EnsureCapacity(maxCharsPerBuffer * 2);
         }
 
         public void Dispose()
@@ -216,10 +216,10 @@ namespace BuildXL.Processes.Internal
                 // We're at EOF, we won't call this function again from here on.
                 lock (m_lock)
                 {
-                    if (StringBuilderInstace.Length != 0)
+                    if (StringBuilderInstance.Length != 0)
                     {
-                        m_messageQueue.Enqueue(StringBuilderInstace.ToString());
-                        StringBuilderInstace.Length = 0;
+                        m_messageQueue.Enqueue(StringBuilderInstance.ToString());
+                        StringBuilderInstance.Length = 0;
                     }
 
                     m_messageQueue.Enqueue(null);
@@ -256,7 +256,12 @@ namespace BuildXL.Processes.Internal
             else
             {
                 int charLen = m_decoder.GetChars(ByteBuffer, 0, byteLen, CharBuffer, 0);
-                GetLinesFromCharBuffers(charLen);
+                if (charLen > 0)
+                {
+                    GetLinesFromCharBuffers(charLen);
+                }
+
+                FlushMessageQueue();
 
                 // File offset is ignored since we're reading a pipe.
                 m_file.ReadOverlapped(this, m_byteBufferPtr, m_byteBufferSize, fileOffset: 0);
@@ -275,11 +280,16 @@ namespace BuildXL.Processes.Internal
             }
         }
 
+        // Assumes len > 0
         private void GetLinesFromCharBuffers(int len)
         {
             // skip a beginning '\n' character of new block if last block ended with '\r'
-            var i = m_bLastCarriageReturn && len > 0 && CharBuffer[0] == '\n' ? 1 : 0;
-            m_bLastCarriageReturn = false;
+            int i = 0;
+            if (m_bLastCarriageReturn && CharBuffer[0] == '\n')
+            {
+                i = 1;
+                m_bLastCarriageReturn = false;
+            }
 
             while (i < len)
             {
@@ -289,28 +299,27 @@ namespace BuildXL.Processes.Internal
                 if (eolPosition == -1)
                 {
                     // The line end was not found, remember the buffer to use next
-                    StringBuilderInstace.Append(CharBuffer, i, len - i);
+                    StringBuilderInstance.Append(CharBuffer, i, len - i);
                     break;
                 }
 
-                if (StringBuilderInstace.Length > 0)
+                string output;
+                if (StringBuilderInstance.Length > 0)
                 {
                     // If there is a remainder from the previous buffer, put them together
-                    StringBuilderInstace.Append(CharBuffer, i, eolPosition - i);
-                    lock (m_lock)
-                    {
-                        m_messageQueue.Enqueue(StringBuilderInstace.ToString());
-                    }
-
-                    StringBuilderInstace.Clear();
+                    StringBuilderInstance.Append(CharBuffer, i, eolPosition - i);
+                    output = StringBuilderInstance.ToString();
+                    StringBuilderInstance.Clear();
                 }
                 else
                 {
                     // Use the newly found string
-                    lock (m_lock)
-                    {
-                        m_messageQueue.Enqueue(new string(CharBuffer, i, eolPosition - i));
-                    }
+                    output = new string(CharBuffer, i, eolPosition - i);
+                }
+
+                lock (m_lock)
+                {
+                    m_messageQueue.Enqueue(output);
                 }
 
                 i = eolPosition + 1;
@@ -329,8 +338,6 @@ namespace BuildXL.Processes.Internal
                     }
                 }
             }
-
-            FlushMessageQueue();
         }
 
         private void FlushMessageQueue()
